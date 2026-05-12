@@ -1,4 +1,3 @@
-import json
 import os
 import re
 from pathlib import Path
@@ -20,7 +19,6 @@ from railgpt_core.llm.rag_service import RAGDispatchService  # noqa: E402
 app = Flask(__name__)
 CORS(app)
 
-# 全局 RAG 服务（首次请求时懒加载知识库）
 rag_service = RAGDispatchService()
 _knowledge_loaded = False
 
@@ -39,53 +37,65 @@ def _strip_thinking(text: str) -> str:
     return text.strip()
 
 
-def _parse_llm_json(raw: str) -> dict:
-    """尝试从大模型回复中提取 JSON，失败则用纯文本兜底。"""
-    # 去除思考块
-    text = _strip_thinking(raw)
+def _parse_answer(text: str) -> dict:
+    """从大模型回复中提取【标记】格式的调度方案。"""
+    text = _strip_thinking(text)
 
-    # 尝试直接解析
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    # 提取所有【步骤N】标签
+    steps = re.findall(r"【步骤\d+】(.*?)(?=(?:【步骤\d+】|【[^步]|$))", text, re.DOTALL)
+    steps = [s.strip() for s in steps if s.strip()]
 
-    # 尝试提取 ```json ... ``` 代码块
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
+    # 提取方案标题
+    title_match = re.search(r"【方案[一二三]】(.*?)(?=(?:【步骤|【方案|【建议|【注意|$))", text, re.DOTALL)
+    plan_title = title_match.group(1).strip() if title_match else ""
 
-    # 尝试找到第一个 { 到最后一个 }
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            pass
+    # 提取注意事项
+    note_match = re.search(r"【注意事项】(.*?)(?=$)", text, re.DOTALL)
+    note = note_match.group(1).strip() if note_match else ""
 
-    # 兜底：整体作为 answer
-    return {"answer": text, "plan": None}
+    # 清理展示文本：去掉步骤标签
+    clean = re.sub(r"【步骤\d+】", "", text)
+
+    return {
+        "answer": clean.strip(),
+        "plan_title": plan_title,
+        "steps": steps,
+        "note": note,
+    }
 
 
 def process_query(user_query: str) -> dict:
     _ensure_knowledge()
 
     result = rag_service.answer(user_query)
-    parsed = _parse_llm_json(result.answer)
+    parsed = _parse_answer(result.answer)
 
-    answer = parsed.get("answer", result.answer)
-    plan = parsed.get("plan") or {}
+    # 构建参考来源
+    seen = set()
+    references: list[dict] = []
+    for chunk in result.retrieved_chunks:
+        key = chunk.source_path
+        if key not in seen:
+            seen.add(key)
+            priority_label = (
+                "场景流程" if chunk.priority == "scenario"
+                else "强规则" if chunk.must_follow
+                else "普通规则"
+            )
+            references.append({
+                "title": chunk.title,
+                "source": chunk.source_path,
+                "priority": priority_label,
+            })
 
     return {
-        "answer": answer,
+        "answer": parsed["answer"],
         "plan": {
-            "title": plan.get("title", "调度方案"),
-            "steps": plan.get("steps", []),
-            "note": plan.get("note", ""),
+            "title": parsed["plan_title"] or "调度方案",
+            "steps": parsed["steps"],
+            "note": parsed["note"],
         },
+        "references": references,
     }
 
 

@@ -16,7 +16,7 @@ class RAGDispatchService:
     def load_knowledge(self) -> None:
         self.retrieval_service.load()
 
-    def answer(self, query: str, top_k: int = 6, temperature: float = 0.2) -> LLMGenerationResult:
+    def answer(self, query: str, top_k: int = 3, temperature: float = 0.2) -> LLMGenerationResult:
         retrieved_chunks = self.retrieval_service.search(query, top_k=top_k)
         system_prompt = build_dispatch_system_prompt()
         user_prompt = build_rag_user_prompt(query, retrieved_chunks)
@@ -24,6 +24,7 @@ class RAGDispatchService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
+            max_tokens=400,
         )
 
         return LLMGenerationResult(

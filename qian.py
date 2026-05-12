@@ -212,17 +212,22 @@ for msg in st.session_state.messages:
             </div>
             ''', unsafe_allow_html=True)
         elif msg["type"] == "plan":
-            steps_html = ""
-            for i, step in enumerate(msg["steps"], 1):
-                steps_html += f'<div class="step-item"><div class="step-number">{i}</div><div>{step}</div></div>'
-            plan_html = f'''
-                <div class="plan-card">
-                    <div class="plan-title">{msg["plan_title"]}</div>
-                    {steps_html}
-                    <div class="note-text">📍 {msg["note"]}</div>
-                </div>
-            '''
-            full = f"{msg['intro']}{plan_html}"
+            # 回答正文
+            full = msg.get("intro", "")
+            # 有步骤才显示方案卡片
+            if msg.get("steps"):
+                steps_html = ""
+                for i, step in enumerate(msg["steps"], 1):
+                    steps_html += f'<div class="step-item"><div class="step-number">{i}</div><div>{step}</div></div>'
+                note_block = f'<div class="note-text">📍 {msg["note"]}</div>' if msg.get("note") else ""
+                plan_html = f'''
+                    <div class="plan-card">
+                        <div class="plan-title">{msg.get("plan_title", "调度方案")}</div>
+                        {steps_html}
+                        {note_block}
+                    </div>
+                '''
+                full += plan_html
             st.markdown(f'''
             <div class="message-row assistant">
                 <div class="avatar assistant">🤖</div>
@@ -260,14 +265,17 @@ if submitted and user_input.strip():
         "intro": res.get("answer", ""),
         "plan_title": "",
         "steps": [],
-        "note": ""
+        "note": "",
+        "references": [],
     }
-    
+
     plan = res.get("plan")
     if plan:
         msg["plan_title"] = plan.get("title", "")
         msg["steps"] = plan.get("steps", [])
         msg["note"] = plan.get("note", "")
-    
+
+    msg["references"] = res.get("references", [])
+
     st.session_state.messages.append(msg)
     st.rerun()

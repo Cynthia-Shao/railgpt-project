@@ -11,6 +11,7 @@ class RailGPTSettings:
     llm_api_key: str
     llm_timeout_seconds: int
     rules_base_dir: str
+    embedding_model: str
 
     @classmethod
     def from_env(cls) -> "RailGPTSettings":
@@ -20,4 +21,5 @@ class RailGPTSettings:
             llm_api_key=os.getenv("RAILGPT_LLM_API_KEY", "EMPTY"),
             llm_timeout_seconds=int(os.getenv("RAILGPT_LLM_TIMEOUT_SECONDS", "120")),
             rules_base_dir=os.getenv("RAILGPT_RULES_BASE_DIR", "data/rules"),
+            embedding_model=os.getenv("RAILGPT_EMBEDDING_MODEL", "bge-m3:latest"),
         )

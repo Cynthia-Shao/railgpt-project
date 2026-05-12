@@ -18,6 +18,7 @@ class OpenAICompatibleLLMClient:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.2,
+        max_tokens: int = 400,
     ) -> str:
         payload = {
             "model": self.settings.llm_model,
@@ -26,6 +27,7 @@ class OpenAICompatibleLLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
+            "max_tokens": max_tokens,
         }
 
         req = request.Request(
