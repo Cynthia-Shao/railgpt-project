@@ -6,7 +6,7 @@ from railgpt_core.retrieval.keyword import keyword_score
 
 
 def priority_bonus(chunk: RetrievedChunk) -> float:
-    if chunk.priority == RulePriority.HARD:
+    if chunk.priority in (RulePriority.HARD, RulePriority.SCENARIO):
         return 2.0
     return 0.5
 

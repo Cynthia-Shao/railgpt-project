@@ -34,14 +34,18 @@ def get_ai_response(user_query):
         resp = requests.post(
             "http://localhost:8000/chat",
             json={"query": user_query},
-            timeout=20
+            timeout=600
         )
         if resp.status_code == 200:
             return resp.json()
         else:
             return {"answer": "服务异常，请稍后重试"}
-    except:
-        return {"answer": "无法连接后端服务，请先启动 backend_server.py"}
+    except requests.exceptions.Timeout:
+        return {"answer": "大模型推理超时（已等待10分钟），请稍后再试或换一个更简短的问题"}
+    except requests.exceptions.ConnectionError:
+        return {"answer": "无法连接后端服务，请先双击 启动后端.bat"}
+    except Exception as e:
+        return {"answer": f"服务异常：{type(e).__name__}"}
 
 # ------------------------------
 # CSS 样式（蓝色按钮 + 拉长界面）
@@ -233,7 +237,7 @@ with st.form("chat_form", clear_on_submit=True):
     col1, col2 = st.columns([5, 1])
     with col1:
         user_input = st.text_input(
-            "",
+            "输入调度问题",
             placeholder="例如：G123次列车晚点40分钟，请给出调整建议",
             label_visibility="collapsed"
         )

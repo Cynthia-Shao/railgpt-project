@@ -30,12 +30,14 @@ def load_rule_documents(base_dir: str | Path = "data/rules") -> list[RuleDocumen
     base_path = Path(base_dir)
     hard_dir = base_path / "hard_rules"
     soft_dir = base_path / "soft_rules"
+    scenario_dir = base_path / "scenarios"
 
     documents: list[RuleDocument] = []
 
     for priority, directory in (
         (RulePriority.HARD, hard_dir),
         (RulePriority.SOFT, soft_dir),
+        (RulePriority.SCENARIO, scenario_dir),
     ):
         for file_path in _iter_rule_files(directory):
             content = normalize_text(read_text_file(file_path))
@@ -49,7 +51,7 @@ def load_rule_documents(base_dir: str | Path = "data/rules") -> list[RuleDocumen
                     content=content,
                     source_path=str(file_path),
                     priority=priority,
-                    must_follow=(priority == RulePriority.HARD),
+                    must_follow=(priority in (RulePriority.HARD, RulePriority.SCENARIO)),
                 )
             )
 

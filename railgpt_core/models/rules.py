@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class RulePriority(str, Enum):
     HARD = "hard"
     SOFT = "soft"
+    SCENARIO = "scenario"
 
 
 class RuleDocument(BaseModel):
