@@ -1,2 +1,0 @@
-cd desktop
-streamlit run moni.py

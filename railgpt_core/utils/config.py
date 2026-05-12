@@ -17,9 +17,9 @@ class RailGPTSettings:
     def from_env(cls) -> "RailGPTSettings":
         return cls(
             llm_base_url=os.getenv("RAILGPT_LLM_BASE_URL", "http://127.0.0.1:8000/v1"),
-            llm_model=os.getenv("RAILGPT_LLM_MODEL", "deepseek-8b"),
-            llm_api_key=os.getenv("RAILGPT_LLM_API_KEY", "EMPTY"),
-            llm_timeout_seconds=int(os.getenv("RAILGPT_LLM_TIMEOUT_SECONDS", "120")),
+            llm_model=os.getenv("RAILGPT_LLM_MODEL", "qwen2.5:latest"),
+            llm_api_key=os.getenv("RAILGPT_LLM_API_KEY", "ollama"),
+            llm_timeout_seconds=int(os.getenv("RAILGPT_LLM_TIMEOUT_SECONDS", "300")),
             rules_base_dir=os.getenv("RAILGPT_RULES_BASE_DIR", "data/rules"),
-            embedding_model=os.getenv("RAILGPT_EMBEDDING_MODEL", "bge-m3:latest"),
+            embedding_model=os.getenv("RAILGPT_EMBEDDING_MODEL", "nomic-embed-text:latest"),
         )
