@@ -2,70 +2,61 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>铁路调度指挥助手 v3</title>
+<title>RailGPT - 铁路调度助手</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; font-family: "Microsoft YaHei", sans-serif; }
 body { background: #f5f7fa; height: 100vh; overflow: hidden; }
-.main-title { text-align: center; font-size: 28px; font-weight: bold; color: #0d3b8f; padding: 14px 0; background: #ffffff; border-bottom: 2px solid #c8d8f2; }
-.container { display: flex; height: calc(100vh - 70px); gap: 12px; padding: 12px; }
-.column { background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.07); padding: 16px; overflow-y: auto; }
-.left { width: 290px; }
-.middle { flex: 1; display: flex; flex-direction: column; }
-.right { width: 300px; }
-.title { font-size: 18px; font-weight: bold; color: #222; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
-.file-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #f7f9fc; margin-bottom: 8px; border-radius: 8px; cursor: pointer; font-size: 14px; }
-.file-item:hover { background: #e6effc; }
-.file-icon { font-size: 16px; width: 20px; text-align: center; }
-.tip { font-size: 13px; color: #888; margin: 10px 0 16px; }
-.chat-box { flex: 1; background: #f9fbfd; border-radius: 8px; padding: 14px; overflow-y: auto; margin-bottom: 12px; display: flex; flex-direction: column; gap: 14px; }
+.main-title { text-align: center; font-size: 26px; font-weight: bold; color: #0d3b8f; padding: 12px 0; background: #fff; border-bottom: 2px solid #c8d8f2; }
+.container { display: flex; height: calc(100vh - 54px); gap: 12px; padding: 12px; }
+.left-col { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 380px; }
+.right-col { flex: 2; background: #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.07); padding: 16px; display: flex; flex-direction: column; overflow: hidden; }
+.card { background: #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.07); padding: 16px; }
+.card-title { font-size: 18px; font-weight: bold; color: #222; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+.files-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; flex-wrap: nowrap; }
+.file-card { flex: 0 0 auto; width: 130px; background: #f7f9fc; border-radius: 8px; padding: 10px 6px; text-align: center; cursor: pointer; border: 1px solid #e2e8f0; transition: all 0.2s; }
+.file-card:hover { background: #e6effc; transform: translateY(-2px); }
+.file-icon { font-size: 28px; display: block; margin-bottom: 6px; }
+.file-name { font-size: 12px; word-break: break-all; color: #0d3b8f; }
+.chat-box { flex: 1; background: #f9fbfd; border-radius: 8px; padding: 14px; overflow-y: auto; margin-bottom: 12px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .message { max-width: 82%; padding: 12px 16px; border-radius: 12px; line-height: 1.7; font-size: 14px; }
 .message-user { background: #0d3b8f; color: #fff; align-self: flex-end; }
-.message-ai { background: #ffffff; border: 1px solid #e2e8f0; color: #222; align-self: flex-start; white-space: pre-line; }
+.message-ai { background: #fff; border: 1px solid #e2e8f0; color: #222; align-self: flex-start; white-space: pre-line; }
 .input-group { display: flex; gap: 8px; }
 #msgInput { flex: 1; padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px; outline: none; font-size: 14px; }
-#sendBtn { padding: 12px 20px; background: #0d3b8f; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; }
+#sendBtn { padding: 12px 20px; background: #0d3b8f; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; }
 #sendBtn:disabled { background: #94a3b8; cursor: not-allowed; }
-.panel { margin-bottom: 18px; }
-.panel-title { font-size: 14px; font-weight: bold; color: #0d3b8f; margin-bottom: 8px; padding-left: 6px; border-left: 3px solid #0d3b8f; }
-.panel-item { background: #eef5ff; padding: 9px 12px; border-radius: 6px; margin-bottom: 6px; font-size: 13px; line-height: 1.5; }
+#trainGraph { width: 100%; flex: 1; min-height: 0; }
+.graph-note { font-size: 12px; color: #555; margin-top: 8px; text-align: center; }
 </style>
 </head>
 <body>
-<div class="main-title">RailGPT v3</div>
+<div class="main-title">RailGPT - 铁路调度智能助手</div>
 <div class="container">
 
-<div class="column left">
-    <div class="title">Files</div>
-    <div class="tip">Double-click to open</div>
-    {{FILE_LIST}}
+<!-- 左侧：文件 + 聊天 -->
+<div class="left-col">
+    <div class="card">
+        <div class="card-title">Files</div>
+        <div class="files-row" id="fileList">{{FILE_LIST}}</div>
+    </div>
+    <div class="card" style="flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0;">
+        <div class="card-title">Chat</div>
+        <div class="chat-box" id="chatBox">
+            <div class="message message-ai">Hello, please enter dispatch information.</div>
+        </div>
+        <div class="input-group">
+            <input type="text" id="msgInput" placeholder="e.g. G103 delay 40 min at Langfang">
+            <button id="sendBtn" onclick="sendMsg()">Send</button>
+        </div>
+    </div>
 </div>
 
-<div class="column middle">
-    <div class="title">Chat</div>
-    <div class="chat-box" id="chatBox">
-        <div class="message message-ai">Hello, please enter dispatch information.</div>
-    </div>
-    <div class="input-group">
-        <input type="text" id="msgInput" placeholder="e.g. G1223 delay 40 min">
-        <button id="sendBtn" onclick="sendMsg()">Send</button>
-    </div>
-</div>
-
-<div class="column right">
-    <div class="title">Reference</div>
-    <div class="panel">
-        <div class="panel-title">Dispatch Rules</div>
-        <div class="panel-item">- Delay >= 15min: issue adjustment order</div>
-        <div class="panel-item">- Priority: on-time trains first</div>
-        <div class="panel-item">- Delay >= 30min: activate passenger response</div>
-    </div>
-    <div class="panel">
-        <div class="panel-title">Commands</div>
-        <div class="panel-item">1. Delay notification</div>
-        <div class="panel-item">2. Section adjustment</div>
-        <div class="panel-item">3. Track change</div>
-        <div class="panel-item">4. Backup train dispatch</div>
-    </div>
+<!-- 右侧：运行图 -->
+<div class="right-col">
+    <div class="card-title">Train Timetable</div>
+    <div id="trainGraph"></div>
+    <div class="graph-note">X-axis: time (minutes) | Y-axis: stations | Each line = one train</div>
 </div>
 
 </div>
@@ -74,23 +65,80 @@ body { background: #f5f7fa; height: 100vh; overflow: hidden; }
 var chatBox = document.getElementById('chatBox');
 var msgInput = document.getElementById('msgInput');
 var sendBtn = document.getElementById('sendBtn');
+var myChart = null;
+
+function fmtTime(m) {
+    var h = Math.floor(m / 60);
+    var min = m % 60;
+    return h.toString().padStart(2,'0') + ':' + min.toString().padStart(2,'0');
+}
+
+async function loadGraph() {
+    try {
+        var resp = await fetch('http://127.0.0.1:8000/api/timetable');
+        var data = await resp.json();
+        if (data.error) { document.getElementById('trainGraph').innerHTML = '<p style="color:red">' + data.error + '</p>'; return; }
+
+        var stations = data.stations;
+        var series = [];
+        var allTimes = [];
+
+        for (var i = 0; i < data.trains.length; i++) {
+            var pts = [];
+            for (var j = 0; j < stations.length; j++) {
+                var v = data.times[i][j];
+                if (v && v !== '') {
+                    var t = parseFloat(v);
+                    pts.push([t, j]);
+                    allTimes.push(t);
+                }
+            }
+            if (pts.length < 2) continue;
+            pts.sort(function(a,b){ return a[0]-b[0]; });
+            series.push({ name: data.trains[i], type: 'line', data: pts, smooth: false,
+                lineStyle: { width: 1.5, opacity: 0.7 }, symbol: 'circle', symbolSize: 3,
+                emphasis: { focus: 'series' } });
+        }
+
+        var tMin = Math.min.apply(null, allTimes);
+        var tMax = Math.max.apply(null, allTimes);
+        var pad = (tMax - tMin) * 0.05;
+        tMin = Math.max(0, tMin - pad);
+        tMax = tMax + pad;
+
+        if (myChart) myChart.dispose();
+        myChart = echarts.init(document.getElementById('trainGraph'));
+        myChart.setOption({
+            tooltip: { trigger: 'item', formatter: function(p) { return '<b>' + fmtTime(p.value[0]) + '</b><br/>' + stations[p.value[1]] + '<br/>' + p.seriesName; } },
+            legend: { type: 'scroll', orient: 'vertical', right: 8, top: 10, bottom: 10, itemWidth: 16, itemHeight: 10, textStyle: { fontSize: 10 } },
+            grid: { left: '8%', right: '14%', top: '8%', bottom: '8%' },
+            xAxis: { name: 'Time', type: 'value', min: tMin, max: tMax, axisLabel: { formatter: fmtTime } },
+            yAxis: { name: 'Station', type: 'category', data: stations, axisLabel: { fontSize: 11 } },
+            series: series,
+            toolbox: { feature: { dataZoom: {}, restore: {}, saveAsImage: {} }, right: 50 },
+            dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 6 }]
+        });
+        window.addEventListener('resize', function() { myChart.resize(); });
+    } catch(e) {
+        document.getElementById('trainGraph').innerHTML = '<p style="color:red;padding:20px;">Failed to load timetable. Is backend running?</p>';
+    }
+}
 
 async function sendMsg() {
     var text = msgInput.value.trim();
     if (!text) return;
-
-    var userMsg = document.createElement('div');
-    userMsg.className = 'message message-user';
-    userMsg.textContent = text;
-    chatBox.appendChild(userMsg);
+    var um = document.createElement('div');
+    um.className = 'message message-user';
+    um.textContent = text;
+    chatBox.appendChild(um);
     msgInput.value = '';
     chatBox.scrollTop = chatBox.scrollHeight;
 
     sendBtn.disabled = true;
-    var loadDiv = document.createElement('div');
-    loadDiv.className = 'message message-ai';
-    loadDiv.textContent = 'Processing...';
-    chatBox.appendChild(loadDiv);
+    var ld = document.createElement('div');
+    ld.className = 'message message-ai';
+    ld.textContent = 'Processing...';
+    chatBox.appendChild(ld);
 
     try {
         var res = await fetch('http://127.0.0.1:8000/chat', {
@@ -99,10 +147,9 @@ async function sendMsg() {
             body: JSON.stringify({ query: text })
         });
         var data = await res.json();
-        chatBox.removeChild(loadDiv);
-
-        var aiMsg = document.createElement('div');
-        aiMsg.className = 'message message-ai';
+        chatBox.removeChild(ld);
+        var am = document.createElement('div');
+        am.className = 'message message-ai';
         var reply = data.answer || 'Service error';
         if (data.plan && data.plan.steps && data.plan.steps.length > 0) {
             reply += '\n\n' + (data.plan.title || 'Plan');
@@ -111,25 +158,24 @@ async function sendMsg() {
             }
             if (data.plan.note) reply += '\n\n' + data.plan.note;
         }
-        aiMsg.textContent = reply;
-        chatBox.appendChild(aiMsg);
-    } catch (e) {
-        chatBox.removeChild(loadDiv);
-        var errMsg = document.createElement('div');
-        errMsg.className = 'message message-ai';
-        errMsg.textContent = 'Cannot connect to backend. Please restart RailGPT.bat. Error: ' + e.message;
-        chatBox.appendChild(errMsg);
+        am.textContent = reply;
+        chatBox.appendChild(am);
+    } catch(e) {
+        chatBox.removeChild(ld);
+        var em = document.createElement('div');
+        em.className = 'message message-ai';
+        em.textContent = 'Backend not available. Please restart RailGPT.bat. Error: ' + e.message;
+        chatBox.appendChild(em);
     }
     sendBtn.disabled = false;
     chatBox.scrollTop = chatBox.scrollHeight;
 }
 
 msgInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        sendMsg();
-    }
+    if (e.key === 'Enter') { e.preventDefault(); sendMsg(); }
 });
+
+loadGraph();
 </script>
 </body>
 </html>

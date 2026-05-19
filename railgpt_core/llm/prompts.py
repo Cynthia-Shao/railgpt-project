@@ -12,7 +12,11 @@ def build_dispatch_system_prompt() -> str:
     )
 
 
-def build_rag_user_prompt(query: str, retrieved_chunks: list[RetrievedChunk]) -> str:
+def build_rag_user_prompt(
+    query: str,
+    retrieved_chunks: list[RetrievedChunk],
+    timetable_context: str = "",
+) -> str:
     context_blocks: list[str] = []
     for index, chunk in enumerate(retrieved_chunks, start=1):
         if chunk.priority == "scenario":
@@ -32,18 +36,28 @@ def build_rag_user_prompt(query: str, retrieved_chunks: list[RetrievedChunk]) ->
 
     context_text = "\n\n".join(context_blocks) if context_blocks else "未检索到相关规则。"
 
-    return (
-        "请直接输出调度方案，使用【】标记：\n\n"
+    prompt = (
+        "你是一名铁路调度员，请直接输出调度方案：\n\n"
+    )
+
+    if timetable_context:
+        prompt += (
+            f"{timetable_context}\n\n"
+            "重要：必须根据以上运行图冲突数据，明确给出每条冲突列车的具体调整措施"
+            "（如：扣停某车次在某个站几分钟、变更股道、调整发车顺序等）。\n\n"
+        )
+
+    prompt += (
+        "输出格式（使用【】标记）：\n"
         "【处置方案】\n"
-        "【方案一】名称\n"
-        "【步骤1】操作步骤和负责角色\n"
-        "【步骤2】操作步骤和负责角色\n"
+        "【方案一】方案名称\n"
+        "【步骤1】具体操作步骤和负责角色\n"
+        "【步骤2】...\n"
         "【方案二】备选方案（如有）\n"
         "【步骤1】...\n"
-        "【建议】推荐方案和理由。\n"
-        "【注意事项】安全提醒。\n\n"
-        "知识库有匹配场景则严格按流程输出，无匹配则结合规则推理。"
-        "不需要输出场景判断或规则罗列，直接给出方案步骤。\n\n"
-        f"用户问题：\n{query}\n\n"
-        f"检索上下文（引用时标注编号）：\n{context_text}"
+        "【建议】推荐方案和理由。\n\n"
     )
+
+    prompt += f"用户问题：\n{query}\n\n"
+    prompt += f"检索上下文（引用时标注编号）：\n{context_text}"
+    return prompt

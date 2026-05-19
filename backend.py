@@ -15,11 +15,18 @@ if _env_path.exists():
             os.environ[_key.strip()] = _value.strip()
 
 from railgpt_core.llm.rag_service import RAGDispatchService  # noqa: E402
+from railgpt_core.timetable.analyzer import TimetableAnalyzer  # noqa: E402
+from railgpt_core.timetable.evaluator import (  # noqa: E402
+    generate_delay_plans, evaluate_plans, format_evaluation_table,
+    generate_speed_restriction_plans,
+)
+from railgpt_core.timetable.analyzer import parse_query_intent as timetable_intent  # noqa: E402
 
 app = Flask(__name__)
 CORS(app)
 
 rag_service = RAGDispatchService()
+rag_service.timetable = TimetableAnalyzer(str(Path(__file__).parent / "planned_timetable.xlsx"))
 _knowledge_loaded = False
 
 
@@ -88,8 +95,37 @@ def process_query(user_query: str) -> dict:
                 "priority": priority_label,
             })
 
+    # 运行图评估
+    intent = timetable_intent(user_query)
+    eval_table = ""
+    if intent:
+        try:
+            plans = []
+            # 场景1：单列车晚点
+            if intent["train_id"] and intent["delay_minutes"] > 0:
+                plans = generate_delay_plans(
+                    rag_service.timetable, intent["train_id"], intent["delay_minutes"]
+                )
+            # 场景2：区间临时限速
+            elif intent["speed_limit"] > 0:
+                # 从问题中找限速区间
+                stations = [s[0] for s in rag_service.timetable.station_pairs]
+                match_stn = next((s for s in stations if s != stations[0] and s != stations[-1]), stations[1] if len(stations) > 1 else "")
+                plans = generate_speed_restriction_plans(
+                    rag_service.timetable, match_stn, intent["speed_limit"]
+                )
+            if plans:
+                eval_results = evaluate_plans(rag_service.timetable, plans)
+                eval_table = format_evaluation_table(eval_results)
+        except Exception:
+            pass
+
+    full_answer = parsed["answer"]
+    if eval_table:
+        full_answer += eval_table
+
     return {
-        "answer": parsed["answer"],
+        "answer": full_answer,
         "plan": {
             "title": parsed["plan_title"] or "调度方案",
             "steps": parsed["steps"],
@@ -110,6 +146,19 @@ def chat():
 @app.route("/health")
 def health():
     return jsonify(status="ok")
+
+
+@app.route("/api/timetable")
+def api_timetable():
+    import pandas as pd
+    xlsx_path = Path(__file__).parent / "planned_timetable.xlsx"
+    if not xlsx_path.exists():
+        return jsonify({"error": "Timetable file not found"}), 404
+    df = pd.read_excel(xlsx_path, index_col=0).fillna("")
+    stations = list(df.columns)
+    trains = list(df.index)
+    times = [[str(c) if c != "" else "" for c in row] for row in df.values.tolist()]
+    return jsonify({"stations": stations, "trains": trains, "times": times})
 
 
 if __name__ == "__main__":

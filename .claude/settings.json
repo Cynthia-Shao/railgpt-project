@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(rm -f hou1.py qian1.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py',encoding='utf-8'\\).read\\(\\)\\); print\\('backend.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('railgpt_core/llm/prompts.py',encoding='utf-8'\\).read\\(\\)\\); print\\('prompts.py OK'\\)\")",
+      "Bash(curl -s -m 5 http://127.0.0.1:8000/health)",
+      "Bash(curl -s -m 5 http://127.0.0.1:11434/api/tags)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('railgpt_core/timetable/evaluator.py',encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(rm -f './~$理论建模.docx')",
+      "Bash(ls -1 *.py *.bat *.md *.html *.txt *.env .gitignore)"
+    ]
+  }
+}
