@@ -1,5 +1,5 @@
 @echo off
-cd /d "d:\RailGPT\railgpt-project"
+cd /d "D:\铁路最后"
 echo ================================================================
 echo   RailGPT - Railway Dispatch AI Assistant
 echo ================================================================

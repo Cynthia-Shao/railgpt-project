@@ -18,7 +18,13 @@ class RAGDispatchService:
     def load_knowledge(self) -> None:
         self.retrieval_service.load()
 
-    def answer(self, query: str, top_k: int = 3, temperature: float = 0.2) -> LLMGenerationResult:
+    def answer(
+        self,
+        query: str,
+        top_k: int = 3,
+        temperature: float = 0.2,
+        extra_timetable_context: str = "",
+    ) -> LLMGenerationResult:
         retrieved_chunks = self.retrieval_service.search(query, top_k=top_k)
         system_prompt = build_dispatch_system_prompt()
 
@@ -31,6 +37,9 @@ class RAGDispatchService:
                     intent["train_id"], intent["delay_minutes"]
                 )
                 timetable_context = "\n\n" + self.timetable.format_for_prompt(analysis)
+
+        if extra_timetable_context:
+            timetable_context = f"{timetable_context}\n\n{extra_timetable_context}".strip()
 
         user_prompt = build_rag_user_prompt(query, retrieved_chunks, timetable_context)
         answer = self.llm_client.chat(
