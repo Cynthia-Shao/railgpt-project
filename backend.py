@@ -20,8 +20,8 @@ from railgpt_core.llm.rag_service import RAGDispatchService  # noqa: E402
 from railgpt_core.llm.router import route_query  # noqa: E402
 from railgpt_core.timetable.analyzer import TimetableAnalyzer  # noqa: E402
 from railgpt_core.timetable.evaluator import (  # noqa: E402
-    generate_delay_plans, evaluate_plans, format_evaluation_table,
-    generate_speed_restriction_plans,
+    SchedulePlan, search_delay_parameter, evaluate_plans, format_evaluation_table,
+    generate_speed_restriction_plans, explain_best_plan,
 )
 from railgpt_core.timetable.analyzer import parse_query_intent as timetable_intent  # noqa: E402
 from railgpt_core.timetable.scenario import (  # noqa: E402
@@ -60,28 +60,29 @@ def _build_strategy_prompt(user_query: str, chunks) -> str:
         context_lines.append(f"[{index}] {priority} | {chunk.title}\n{content}")
 
     context = "\n\n".join(context_lines) if context_lines else "未检索到规则。"
-    return f"""你是高速铁路调度规则审查员。请只根据用户场景和规则上下文，输出一个JSON策略，不要输出多余文字。
+    return f"""你是高速铁路调度策略分析师。根据用户场景和规则上下文，输出调度策略选项。
 
 要求：
-1. 大模型只负责合规策略选择，不直接编造完整运行图。
-2. 必须避免调整已通过影响区段的列车。
-3. allowed_actions 只能从 speed_restriction、hold_before_section、batch_release、compress_dwell、delay_propagation 中选择。
-4. 如果规则不足，以安全保守为先。
+1. 给出2~3个策略选项，每个选项说明思路和预计效果
+2. 每个策略标注对应的算法动作标签（用于算法精确计算）
+3. 推荐其中一个策略并说明理由
+4. 算法动作标签只能是：compress_dwell / delay_propagation / hold_conflicts / speed_restriction
+5. 不要输出多余文字，严格按照下方格式输出
 
-JSON字段：
-{{
-  "event_type": "speed_restriction 或 station_delay 或 dispatch_qa",
-  "location": "影响车站或区段中心",
-  "start_time_minutes": 数字或null,
-  "duration_minutes": 数字或null,
-  "range_km": 数字或null,
-  "speed_limit": 数字或null,
-  "allowed_actions": ["..."],
-  "forbidden_actions": ["..."],
-  "hard_constraints": ["..."],
-  "rule_basis": "不超过60字的规则依据摘要",
-  "strategy_summary": "不超过50字的处置策略摘要"
-}}
+输出格式：
+【策略选项】
+【方案A】方案名称
+思路：用一两句话说明这个策略怎么做
+预计效果：预估对列车运行的影响
+算法动作：compress_dwell
+
+【方案B】方案名称
+思路：...
+预计效果：...
+算法动作：delay_propagation
+
+【推荐】方案X
+理由：不超过50字
 
 用户场景：
 {user_query}
@@ -91,40 +92,108 @@ JSON字段：
 """
 
 
+def _parse_strategy_options(llm_text: str) -> dict:
+    """从LLM输出中解析策略选项和推荐。"""
+    import re
+
+    result: dict = {
+        "options": [],
+        "recommended": "",
+        "recommended_action": "",
+        "recommended_reason": "",
+        "options_text": llm_text.strip(),
+        "_parse_error": False,
+    }
+
+    if not llm_text or not llm_text.strip():
+        result["_parse_error"] = True
+        return result
+
+    text = _strip_thinking(llm_text)
+
+    # 提取所有方案块
+    option_pattern = re.findall(
+        r"【方案([一二三四五六七八九十A-Za-z]+)】\s*(.*?)\n"
+        r"思路[:：]\s*(.*?)\n"
+        r"预计效果[:：]\s*(.*?)\n"
+        r"算法动作[:：]\s*(\w+)",
+        text, re.DOTALL,
+    )
+
+    for match in option_pattern:
+        label, name, idea, effect, action = match
+        result["options"].append({
+            "label": f"方案{label}",
+            "name": name.strip(),
+            "idea": idea.strip(),
+            "effect": effect.strip(),
+            "action": action.strip(),
+        })
+
+    # 提取推荐
+    rec_match = re.search(r"【推荐】\s*(方案[一二三四五六七八九十A-Za-z]+)", text)
+    if rec_match:
+        result["recommended"] = rec_match.group(1).strip()
+
+    reason_match = re.search(r"理由[:：]\s*(.*?)(?:\n|$)", text)
+    if reason_match:
+        result["recommended_reason"] = reason_match.group(1).strip()
+
+    # 找到推荐方案对应的算法动作
+    for opt in result["options"]:
+        if opt["label"] == result["recommended"]:
+            result["recommended_action"] = opt["action"]
+            result["recommended_name"] = opt["name"]
+            break
+
+    if not result["options"]:
+        result["_parse_error"] = True
+
+    return result
+
+
 def _strategy_from_rules(user_query: str, chunks) -> dict:
+    """调用LLM生成策略选项，返回结构化结果。"""
     prompt = _build_strategy_prompt(user_query, chunks)
-    old_timeout = rag_service.llm_client.settings.llm_timeout_seconds
-    rag_service.llm_client.settings.llm_timeout_seconds = min(old_timeout, 20)
     try:
         answer = rag_service.llm_client.chat(
-            system_prompt="你只输出合法JSON，不输出解释。",
+            system_prompt="你是高速铁路调度策略分析师，只按格式输出，不输出多余内容。",
             user_prompt=prompt,
-            temperature=0.1,
-            max_tokens=500,
+            temperature=0.3,
+            max_tokens=600,
         )
     except Exception as exc:
         return {
-            "strategy_summary": "大模型策略生成失败，采用本地保守策略。",
+            "strategy_summary": "大模型策略生成失败，采用算法自动搜索。",
             "rule_basis": f"LLM不可用：{exc}",
-            "allowed_actions": ["speed_restriction", "hold_before_section", "batch_release"],
-            "forbidden_actions": ["adjust_passed_trains"],
+            "allowed_actions": ["compress_dwell", "delay_propagation", "hold_conflicts"],
+            "forbidden_actions": [],
             "hard_constraints": ["已通过影响区段的列车不可调整", "必须满足安全间隔"],
             "_llm_failed": True,
+            "_parsed": None,
         }
-    finally:
-        rag_service.llm_client.settings.llm_timeout_seconds = old_timeout
 
-    strategy = _extract_json_object(answer)
-    if not strategy:
-        strategy = {
-            "strategy_summary": "大模型策略解析失败，采用本地保守策略。",
-            "rule_basis": "策略JSON解析失败",
-            "allowed_actions": ["speed_restriction", "hold_before_section", "batch_release"],
-            "forbidden_actions": ["adjust_passed_trains"],
+    parsed = _parse_strategy_options(answer)
+    if parsed["_parse_error"] or not parsed.get("recommended_action"):
+        return {
+            "strategy_summary": "大模型策略解析失败，采用算法自动搜索。",
+            "rule_basis": "策略格式解析失败",
+            "allowed_actions": ["compress_dwell", "delay_propagation", "hold_conflicts"],
+            "forbidden_actions": [],
             "hard_constraints": ["已通过影响区段的列车不可调整", "必须满足安全间隔"],
-            "_raw_strategy": answer,
+            "_parse_error": True,
+            "_parsed": parsed,
         }
-    return strategy
+
+    return {
+        "strategy_summary": f"推荐{parsed['recommended']}：{parsed.get('recommended_name', '')}",
+        "rule_basis": parsed.get("recommended_reason", ""),
+        "allowed_actions": [parsed["recommended_action"]],
+        "forbidden_actions": [],
+        "hard_constraints": ["已通过影响区段的列车不可调整", "必须满足安全间隔"],
+        "_parsed": parsed,
+        "_llm_success": True,
+    }
 
 
 def _ensure_knowledge():
@@ -260,43 +329,49 @@ def _build_concise_dispatch_answer(
     optimized_plan_name: str,
     diff_rows: list[dict],
     strategy: dict | None = None,
+    detail: str = "",
 ) -> str:
+    """生成简洁的调度方案输出，包含百分制评分和可解释性说明。"""
     if not event or not optimizer_results:
         return "未识别到可生成新运行图的扰动事件，请补充地点、时间或影响范围。"
 
-    affected = "、".join(event.affected_trains[:8]) if event.affected_trains else "无"
-    if event.affected_trains and len(event.affected_trains) > 8:
-        affected += f"等{len(event.affected_trains)}趟"
-
-    excluded = ""
-    if event.excluded_trains:
-        first = event.excluded_trains[0]
-        excluded = f"{first['train']}已排除：{first['reason']}"
-
-    top_diff = "、".join(
-        f"{row['train']}+{row['max_shift']:.0f}min"
-        for row in diff_rows[:5]
-    ) or "无明显调整"
-
     best = optimizer_results[0]
-    score = best.get("score", 0)
+    score_pct = round(best.get("score", 0) * 100, 1)
     tdt = best.get("TDT", "-")
-    rule_basis = (strategy or {}).get("rule_basis") or "按规则库检索结果采用安全保守策略"
-    strategy_summary = (strategy or {}).get("strategy_summary") or optimized_plan_name
-    strategy_summary = str(strategy_summary).rstrip("。.")
-    rule_basis = str(rule_basis).rstrip("。.")
+    affected = best.get("affected_trains", "-")
+    tpmd = best.get("TPMD", "-")
+
+    plan_name = best.get("name", optimized_plan_name)
+
+    strategy_summary = ""
+    if strategy:
+        parsed = strategy.get("_parsed")
+        if parsed and parsed.get("recommended_name"):
+            strategy_summary = f"{parsed['recommended']}（{parsed['recommended_name']}）"
+        elif strategy.get("strategy_summary"):
+            strategy_summary = str(strategy["strategy_summary"]).rstrip("。.")
+    if not strategy_summary:
+        strategy_summary = optimized_plan_name
+
+    rule_basis = ""
+    if strategy:
+        if strategy.get("recommended_reason"):
+            rule_basis = strategy["recommended_reason"]
+        elif strategy.get("rule_basis"):
+            rule_basis = str(strategy["rule_basis"]).rstrip("。.")
+    if not rule_basis:
+        rule_basis = "按规则库检索结果采用安全保守策略"
 
     lines = [
-        f"事件：{event.description}，位置{event.station or '未指定'}。",
-        f"策略：{strategy_summary}。",
-        f"处置：采用{optimized_plan_name}，限速{event.speed_limit or '-'}km/h。",
-        f"影响：{affected}。",
-        f"调整：{top_diff}。",
-        f"评估：总晚点{tdt}min，综合得分{score}。",
-        f"依据：{rule_basis}",
+        "【调度方案】",
+        f"采用策略：{strategy_summary}",
+        f"最优方案：{plan_name}",
+        f"综合评分：{score_pct} / 100",
+        f"总晚点：{tdt} min | 影响列车：{affected} 列 | 旅客延误：{tpmd} 人·min",
     ]
-    if excluded:
-        lines.append(excluded)
+    if detail:
+        lines.append(detail)
+    lines.append(f"依据：{rule_basis}")
     lines.append("新运行图已生成，可在右侧切换查看。")
     return "\n".join(lines)
 
@@ -325,15 +400,19 @@ def process_query(user_query: str, use_llm_strategy: bool = True) -> dict:
             strategy = {
                 "strategy_summary": "快速算法模式，跳过大模型策略生成。",
                 "rule_basis": "由本地规则解析与运行图优化器直接生成。",
-                "allowed_actions": ["speed_restriction", "hold_before_section", "batch_release"],
-                "forbidden_actions": ["adjust_passed_trains"],
+                "allowed_actions": [],
+                "forbidden_actions": [],
                 "hard_constraints": ["已通过影响区段的列车不可调整", "必须满足安全间隔"],
                 "_llm_skipped": True,
             }
-        scenario_result = optimize_for_scenario(rag_service.timetable, user_query, strategy=strategy)
+        # 从策略中提取算法动作
+        selected_actions = strategy.get("allowed_actions") if strategy.get("allowed_actions") else None
+        scenario_result = optimize_for_scenario(
+            rag_service.timetable, user_query, strategy=strategy, actions=selected_actions,
+        )
         if scenario_result is None and strategy:
             strategy["_fallback_reason"] = "LLM策略未生成可行运行图，已退回本地场景解析与优化。"
-            scenario_result = optimize_for_scenario(rag_service.timetable, user_query, strategy=None)
+            scenario_result = optimize_for_scenario(rag_service.timetable, user_query, strategy=None, actions=None)
         if scenario_result:
             event, optimizer_results, best_plan, adjusted_df = scenario_result
             optimizer_context = format_optimizer_context(event, optimizer_results)
@@ -406,7 +485,7 @@ def process_query(user_query: str, use_llm_strategy: bool = True) -> dict:
             plans = []
             # 场景1：单列车晚点
             if intent["train_id"] and intent["delay_minutes"] > 0:
-                plans = generate_delay_plans(
+                plans = search_delay_parameter(
                     rag_service.timetable, intent["train_id"], intent["delay_minutes"]
                 )
             # 场景2：区间临时限速
@@ -424,12 +503,28 @@ def process_query(user_query: str, use_llm_strategy: bool = True) -> dict:
             pass
 
     if optimizer_results:
+        # 生成可解释性说明
+        detail = ""
+        try:
+            if scenario_result:
+                _event, _results, best_plan, _adj_df = scenario_result
+                original = SchedulePlan("original", best_plan.train_ids, best_plan.station_names)
+                original.copy_from_original(rag_service.timetable)
+                second = optimizer_results[1] if len(optimizer_results) > 1 else None
+                detail = explain_best_plan(
+                    optimizer_results[0], second, best_plan, original,
+                    event_train_id=event.train_id if event else "",
+                )
+        except Exception:
+            pass
+
         full_answer = _build_concise_dispatch_answer(
             event,
             optimizer_results,
             optimized_plan_name,
             _latest_diff_rows,
             strategy,
+            detail=detail,
         )
     else:
         full_answer = parsed["answer"]

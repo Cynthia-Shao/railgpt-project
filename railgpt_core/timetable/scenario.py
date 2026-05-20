@@ -9,7 +9,7 @@ from railgpt_core.timetable.analyzer import TimetableAnalyzer
 from railgpt_core.timetable.evaluator import (
     SchedulePlan,
     evaluate_plans,
-    generate_delay_plans,
+    search_delay_parameter,
 )
 
 
@@ -130,6 +130,18 @@ def parse_scenario_event(query: str, analyzer: TimetableAnalyzer) -> ScenarioEve
             end_time=end_time,
             range_km=_extract_range_km(query),
             description="降雨天气触发区间临时限速",
+        )
+
+    if any(word in query for word in ("晚点",)):
+        return ScenarioEvent(
+            event_type="station_delay",
+            train_id=train_id,
+            station=_extract_station(query, analyzer, fallback_index=1),
+            delay_minutes=_extract_minutes(query, default=10),
+            start_time=start_time,
+            duration_minutes=duration,
+            end_time=end_time,
+            description="列车晚点导致运行图扰动",
         )
 
     if any(word in query for word in ("堵门", "车门", "乘客", "旅客", "站台滞留")):
@@ -348,20 +360,75 @@ def _generate_timed_speed_plans(
     return [plan_a, plan_b]
 
 
-def generate_plans_for_event(
+def search_speed_parameter(
     analyzer: TimetableAnalyzer,
     event: ScenarioEvent,
 ) -> list[SchedulePlan]:
+    """对限速额外时间做网格搜索，返回候选方案列表。"""
+    if analyzer.df is None:
+        return []
+
+    affected, excluded = _find_affected_trains(analyzer, event)
+    event.affected_trains = affected
+    event.excluded_trains = excluded[:12]
+    if not affected:
+        return []
+
+    trains = [str(t) for t in analyzer.df.index]
+    stations = [s[0] for s in analyzer.station_pairs]
+    station_indices = _event_station_indices(analyzer, event)
+    first_adjust_idx = min(station_indices)
+    base_extra_time = _extra_time_for_speed_limit(event.speed_limit)
+
+    plans: list[SchedulePlan] = []
+
+    # 额外时间维度搜索
+    for et in range(int(base_extra_time), int(base_extra_time) + 7):
+        plan = SchedulePlan(f"区段延时-{et}min", trains, stations)
+        plan.copy_from_original(analyzer)
+        for train in affected:
+            sched = analyzer.get_train_schedule(train)
+            if not sched:
+                continue
+            for i in range(first_adjust_idx, len(sched)):
+                stop = sched[i]
+                plan.set(train, stop["station"],
+                         stop["arrival"] + et, stop["departure"] + et)
+        plans.append(plan)
+
+    # 基准方案：前站扣停分批放行
+    plan_b = SchedulePlan("前站扣停分批放行", trains, stations)
+    plan_b.copy_from_original(analyzer)
+    for rank, train in enumerate(affected):
+        sched = analyzer.get_train_schedule(train)
+        if not sched:
+            continue
+        offset = base_extra_time + rank * 2
+        for i in range(first_adjust_idx, len(sched)):
+            stop = sched[i]
+            plan_b.set(train, stop["station"],
+                       stop["arrival"] + offset, stop["departure"] + offset)
+    plans.append(plan_b)
+
+    return plans
+
+
+def generate_plans_for_event(
+    analyzer: TimetableAnalyzer,
+    event: ScenarioEvent,
+    actions: list[str] | None = None,
+) -> list[SchedulePlan]:
     if event.event_type == "station_delay" and event.train_id and event.delay_minutes > 0:
-        return generate_delay_plans(
+        return search_delay_parameter(
             analyzer,
             event.train_id,
             event.delay_minutes,
             start_station=event.station,
+            actions=actions,
         )
 
     if event.event_type == "speed_restriction" and event.speed_limit > 0:
-        return _generate_timed_speed_plans(analyzer, event)
+        return search_speed_parameter(analyzer, event)
 
     return []
 
@@ -389,13 +456,14 @@ def optimize_for_scenario(
     analyzer: TimetableAnalyzer,
     query: str,
     strategy: dict | None = None,
+    actions: list[str] | None = None,
 ) -> tuple[ScenarioEvent, list[dict], SchedulePlan, pd.DataFrame] | None:
     event = parse_scenario_event(query, analyzer)
     if event is None:
         return None
     event = apply_strategy_to_event(event, strategy, analyzer)
 
-    plans = generate_plans_for_event(analyzer, event)
+    plans = generate_plans_for_event(analyzer, event, actions=actions)
     if not plans:
         return None
 

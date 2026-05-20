@@ -10,12 +10,11 @@ def _expand_cjk_token(token: str) -> list[str]:
         return [token]
 
     expanded = [token]
-    expanded.extend(char for char in token if "\u4e00" <= char <= "\u9fff")
+    # \u4e0d\u6dfb\u52a0\u5355\u4e2aCJK\u5b57\u7b26\u2014\u2014\u5355\u5b57\u5339\u914d\u8fc7\u4e8e\u5bbd\u6cdb\uff08\u5982"\u8f66"\u5339\u914d\u6240\u6709\u94c1\u8def\u6587\u6863\uff09
 
     if all("\u4e00" <= char <= "\u9fff" for char in token):
         expanded.extend(token[index:index + 2] for index in range(len(token) - 1))
 
-    # Preserve order while removing duplicates.
     return list(dict.fromkeys(expanded))
 
 

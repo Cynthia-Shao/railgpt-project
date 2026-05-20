@@ -5,10 +5,10 @@ from railgpt_core.models.rules import RulePriority
 
 
 def priority_bonus_norm(chunk: RetrievedChunk) -> float:
-    """归一化优先级加权：强规则/场景 = 1.0，普通规则 = 0.25"""
+    """归一化优先级加权：强规则/场景 = 0.3，普通规则 = 0.1"""
     if chunk.priority in (RulePriority.HARD, RulePriority.SCENARIO):
-        return 1.0
-    return 0.25
+        return 0.3
+    return 0.1
 
 
 def combined_score(

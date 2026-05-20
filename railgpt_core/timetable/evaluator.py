@@ -211,11 +211,11 @@ def normalize_metrics(metrics_list: list[dict]) -> list[dict]:
 # ========== 第4层：综合打分 ==========
 
 DEFAULT_WEIGHTS = {
-    "TDT_norm": 0.20,
-    "ADT_norm": 0.10,
-    "TPMD_norm": 0.20,
-    "TAP_norm": 0.15,
-    "VFD_norm": 0.10,
+    "TDT_norm": 0.30,
+    "ADT_norm": 0.05,
+    "TPMD_norm": 0.25,
+    "TAP_norm": 0.10,
+    "VFD_norm": 0.05,
     "SD_norm": 0.10,
     "SRT_norm": 0.15,
 }
@@ -227,7 +227,8 @@ def compute_scores(normalized: list[dict], weights: dict | None = None) -> list[
         weights = DEFAULT_WEIGHTS
     scores = []
     for m in normalized:
-        score = sum(weights[k] * m.get(k, 0) for k in weights)
+        # 平方处理拉开区分度：0.9²=0.81, 0.95²=0.9025，差距从0.05扩至0.0925
+        score = sum(weights[k] * (m.get(k, 0) ** 2) for k in weights)
         scores.append({
             "TDT": m["TDT"],
             "ADT": m["ADT"],
@@ -317,6 +318,155 @@ def generate_delay_plans(
                    stn["arrival"] + delay_minutes,
                    stn["departure"] + delay_minutes)
     plans.append(plan_c)
+
+    return plans
+
+
+# ========== 参数化方案生成器 ==========
+
+def _generate_compress_dwell_plan(
+    analyzer: TimetableAnalyzer,
+    train_id: str,
+    delay_minutes: float,
+    start_station: str,
+    dwell_target: float,
+) -> SchedulePlan:
+    """生成一个将后续停站压缩到 dwell_target 分钟的方案。"""
+    sched = analyzer.get_train_schedule(train_id)
+    start_idx = 0
+    for i, s in enumerate(sched):
+        if start_station and start_station in s["station"]:
+            start_idx = i
+            break
+
+    trains = [t for t in analyzer.df.index]
+    stations = [s[0] for s in analyzer.station_pairs]
+    plan = SchedulePlan(f"压缩停站-{int(dwell_target)}min", trains, stations)
+    plan.copy_from_original(analyzer)
+
+    accumulated = delay_minutes
+    for i in range(start_idx, len(sched)):
+        stn = sched[i]
+        new_arr = stn["arrival"] + accumulated
+        if stn["stops"] and (stn["departure"] - stn["arrival"]) > dwell_target:
+            new_dep = new_arr + dwell_target
+            saved = (stn["departure"] - stn["arrival"]) - dwell_target
+        else:
+            new_dep = new_arr + max(0, stn["departure"] - stn["arrival"])
+            saved = 0
+        plan.set(train_id, stn["station"], new_arr, new_dep)
+        accumulated = max(0, accumulated - saved)
+    return plan
+
+
+def _generate_hold_conflicts_plan(
+    analyzer: TimetableAnalyzer,
+    train_id: str,
+    delay_minutes: float,
+    start_station: str,
+    hold_minutes: float,
+) -> SchedulePlan:
+    """生成一个将所有冲突列车扣停 hold_minutes 分钟的方案。"""
+    sched = analyzer.get_train_schedule(train_id)
+    start_idx = 0
+    for i, s in enumerate(sched):
+        if start_station and start_station in s["station"]:
+            start_idx = i
+            break
+
+    trains = [t for t in analyzer.df.index]
+    stations = [s[0] for s in analyzer.station_pairs]
+    plan = SchedulePlan(f"扣停冲突-{int(hold_minutes)}min", trains, stations)
+    plan.copy_from_original(analyzer)
+
+    conflicts = analyzer.find_conflicts(train_id, int(delay_minutes))
+    held_trains: set[str] = set()
+    for c in conflicts.get("conflicts", []):
+        ot = c["other_train"]
+        if ot not in held_trains:
+            held_trains.add(ot)
+            other_sched = analyzer.get_train_schedule(ot)
+            if other_sched:
+                for os in other_sched:
+                    plan.set(ot, os["station"],
+                             os["arrival"] + hold_minutes,
+                             os["departure"] + hold_minutes)
+    # 延迟车照常延迟
+    for i in range(start_idx, len(sched)):
+        stn = sched[i]
+        plan.set(train_id, stn["station"],
+                 stn["arrival"] + delay_minutes,
+                 stn["departure"] + delay_minutes)
+    return plan
+
+
+def search_delay_parameter(
+    analyzer: TimetableAnalyzer,
+    train_id: str,
+    delay_minutes: float,
+    start_station: str = "",
+    actions: list[str] | None = None,
+) -> list[SchedulePlan]:
+    """对停站压缩和扣停分钟数做网格搜索，返回所有候选方案。
+
+    actions 可选值: compress_dwell, hold_conflicts, delay_propagation。
+    传 None 或空列表表示全部搜索。
+    """
+    sched = analyzer.get_train_schedule(train_id)
+    if sched is None:
+        return []
+
+    start_idx = 0
+    for i, s in enumerate(sched):
+        if start_station and start_station in s["station"]:
+            start_idx = i
+            break
+
+    if actions is None:
+        actions = ["compress_dwell", "hold_conflicts", "delay_propagation"]
+    action_set = set(actions)
+
+    delay_int = int(delay_minutes)
+    plans: list[SchedulePlan] = []
+
+    # 停站压缩维度搜索
+    if "compress_dwell" in action_set:
+        max_dwell = MIN_DWELL
+        for i in range(start_idx, len(sched)):
+            stn = sched[i]
+            if stn["stops"]:
+                dwell = stn["departure"] - stn["arrival"]
+                if dwell > max_dwell:
+                    max_dwell = dwell
+        max_dwell = min(max_dwell, max(delay_int, 15))
+        dwell_step = max(1, (int(max_dwell) - int(MIN_DWELL)) // 15)
+        for dw in range(int(MIN_DWELL), int(max_dwell) + 1, dwell_step):
+            plan = _generate_compress_dwell_plan(
+                analyzer, train_id, delay_minutes, start_station, float(dw),
+            )
+            plans.append(plan)
+
+    # 扣停分钟维度搜索
+    if "hold_conflicts" in action_set:
+        hold_step = max(1, delay_int // 10)
+        for hm in range(1, delay_int + 1, hold_step):
+            plan = _generate_hold_conflicts_plan(
+                analyzer, train_id, delay_minutes, start_station, float(hm),
+            )
+            plans.append(plan)
+
+    # 基准方案：纯延迟传播
+    if "delay_propagation" in action_set:
+        trains = [t for t in analyzer.df.index]
+        stations = [s[0] for s in analyzer.station_pairs]
+        baseline = SchedulePlan("延迟传播-基准", trains, stations)
+        baseline.copy_from_original(analyzer)
+        for i in range(start_idx, len(sched)):
+            stn = sched[i]
+            baseline.set(train_id, stn["station"],
+                         stn["arrival"] + delay_minutes,
+                         stn["departure"] + delay_minutes)
+        plans.append(baseline)
 
     return plans
 
@@ -451,6 +601,57 @@ def evaluate_plans(
 
     results.sort(key=lambda x: x.get("score", 0), reverse=True)
     return results
+
+
+def explain_best_plan(
+    best_result: dict,
+    second_result: dict | None,
+    best_plan: SchedulePlan,
+    original: SchedulePlan,
+    event_train_id: str = "",
+) -> str:
+    """生成最优方案的可解释性说明：逐站节省 + 与次优方案对比。"""
+    parts: list[str] = []
+
+    # 逐站停站时间对比
+    if event_train_id and event_train_id in best_plan.departure:
+        savings: list[tuple[str, float, float]] = []
+        for stn in best_plan.station_names:
+            orig_arr = original.arrival.get(event_train_id, {}).get(stn)
+            orig_dep = original.departure.get(event_train_id, {}).get(stn)
+            new_arr = best_plan.arrival.get(event_train_id, {}).get(stn)
+            new_dep = best_plan.departure.get(event_train_id, {}).get(stn)
+            if orig_arr is None or new_arr is None:
+                continue
+            orig_dwell = orig_dep - orig_arr if orig_dep and orig_arr else 0
+            new_dwell = new_dep - new_arr if new_dep and new_arr else 0
+            saved = round(orig_dwell - new_dwell, 1)
+            if saved > 0.5:
+                savings.append((stn, orig_dwell, new_dwell, saved))
+
+        if savings:
+            savings.sort(key=lambda x: x[3], reverse=True)
+            top_saves = savings[:3]
+            save_strs = []
+            for stn, od, nd, sv in top_saves:
+                save_strs.append(f"{stn}站停站从{od:.0f}min→{nd:.0f}min（节省{sv:.0f}min）")
+            parts.append("逐站节省：" + "；".join(save_strs) + "。")
+
+    # 与次优方案对比
+    if second_result:
+        diffs = []
+        best_tdt = best_result.get("TDT", 0)
+        second_tdt = second_result.get("TDT", 0)
+        best_tpmd = best_result.get("TPMD", 0)
+        second_tpmd = second_result.get("TPMD", 0)
+        if best_tdt != second_tdt:
+            diffs.append(f"总晚点减少{second_tdt - best_tdt:.0f}min")
+        if best_tpmd != second_tpmd:
+            diffs.append(f"旅客延误减少{second_tpmd - best_tpmd:.0f}人·min")
+        if diffs:
+            parts.append(f"对比次优方案（{second_result.get('name', '?')}）：{'，'.join(diffs)}。")
+
+    return "".join(parts) if parts else ""
 
 
 def format_evaluation_table(results: list[dict]) -> str:

@@ -145,27 +145,65 @@ async function loadGraph(version) {
         var resp = await fetch('http://127.0.0.1:8000/api/timetable?version=' + encodeURIComponent(version));
         var data = await resp.json();
         if (data.error) { document.getElementById('trainGraph').innerHTML = '<p style="color:red">' + data.error + '</p>'; return; }
+
+        var origData = null;
+        var changedTrains = [];
+        if (version === 'adjusted' && data.diff && data.diff.length > 0) {
+            try {
+                var origResp = await fetch('http://127.0.0.1:8000/api/timetable?version=original');
+                origData = await origResp.json();
+                if (!origData.error) {
+                    changedTrains = data.diff.map(function(d) { return d.train; });
+                }
+            } catch(e) { origData = null; }
+        }
+
         setGraphButtons(version);
 
         var stations = data.stations;
         var series = [];
         var allTimes = [];
 
-        for (var i = 0; i < data.trains.length; i++) {
+        function buildSeries(trainIdx, trainName, timesData, lineStyle) {
             var pts = [];
             for (var j = 0; j < stations.length; j++) {
-                var v = data.times[i][j];
+                var v = timesData[trainIdx][j];
                 if (v && v !== '') {
                     var t = parseFloat(v);
                     pts.push([t, j]);
                     allTimes.push(t);
                 }
             }
-            if (pts.length < 2) continue;
+            if (pts.length < 2) return null;
             pts.sort(function(a,b){ return a[0]-b[0]; });
-            series.push({ name: data.trains[i], type: 'line', data: pts, smooth: false,
-                lineStyle: { width: 1.5, opacity: 0.7 }, symbol: 'circle', symbolSize: 3,
-                emphasis: { focus: 'series' } });
+            return { name: trainName, type: 'line', data: pts, smooth: false,
+                lineStyle: lineStyle || { width: 1.5, opacity: 0.7 },
+                symbol: 'circle', symbolSize: 3, emphasis: { focus: 'series' } };
+        }
+
+        if (version === 'adjusted' && origData) {
+            for (var i = 0; i < data.trains.length; i++) {
+                var tn = data.trains[i];
+                if (changedTrains.indexOf(tn) >= 0) {
+                    var oi = origData.trains.indexOf(tn);
+                    if (oi >= 0) {
+                        var os = buildSeries(oi, tn + ' (原)', origData.times,
+                            { width: 1, type: 'dashed', opacity: 0.4, color: '#94a3b8' });
+                        if (os) series.push(os);
+                    }
+                    var ns = buildSeries(i, tn + ' (新)', data.times,
+                        { width: 2, opacity: 0.9 });
+                    if (ns) series.push(ns);
+                } else {
+                    var s = buildSeries(i, tn, data.times, { width: 1.5, opacity: 0.7 });
+                    if (s) series.push(s);
+                }
+            }
+        } else {
+            for (var i = 0; i < data.trains.length; i++) {
+                var s = buildSeries(i, data.trains[i], data.times, { width: 1.5, opacity: 0.7 });
+                if (s) series.push(s);
+            }
         }
 
         var tMin = Math.min.apply(null, allTimes);
