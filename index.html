@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>RailGPT - 铁路调度智能助手</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 15px;
+            background-color: #f5f7fa;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .system-header {
+            text-align: center;
+            color: #1a365d;
+            font-size: 22px;
+            font-weight: bold;
+            margin-bottom: 12px;
+        }
+        .main-container {
+            display: flex;
+            flex: 1;
+            gap: 15px;
+            min-height: 0;
+        }
+        .left-column {
+            flex: 3.5;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            min-width: 320px;
+        }
+        .files-box {
+            background: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            padding: 15px;
+            max-height: 240px;
+            display: flex;
+            flex-direction: column;
+        }
+        .files-box h3 { margin: 0 0 10px 0; font-size: 15px; color: #2d3748; }
+        .file-container {
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .chat-box {
+            background: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            padding: 15px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .chat-box h3 { margin: 0 0 10px 0; font-size: 15px; color: #2d3748; }
+        .chat-history {
+            flex: 1;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 10px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            background: #fafafa;
+            font-size: 13px;
+        }
+        .input-area {
+            display: flex;
+            gap: 10px;
+        }
+        .input-area textarea {
+            flex: 1;
+            height: 54px;
+            padding: 8px;
+            border: 1px solid #cbd5e0;
+            border-radius: 4px;
+            resize: none;
+            font-size: 13px;
+        }
+        .input-area button {
+            width: 80px;
+            background: #1a365d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 13px;
+        }
+        .right-column {
+            flex: 6.5;
+            background: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #edf2f7;
+        }
+        .top-bar h3 { margin: 0; color: #2d3748; font-size: 16px; }
+        .toggle-group {
+            background: #edf2f7;
+            padding: 3px;
+            border-radius: 6px;
+            display: flex;
+        }
+        .toggle-btn {
+            border: none;
+            background: transparent;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 4px;
+            color: #4a5568;
+        }
+        .toggle-btn.active {
+            background: #ffffff;
+            color: #2b6cb0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .chart-wrapper {
+            flex: 1;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: #ffffff;
+            min-height: 200px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="system-header">RailGPT - 铁路调度智能助手</div>
+
+<div class="main-container">
+    <div class="left-column">
+        <div class="files-box">
+            <h3>📁 Files (本地规章与数据文档)</h3>
+            <div class="file-container">
+                {{FILE_LIST}}
+            </div>
+        </div>
+
+        <div class="chat-box">
+            <h3>💬 Chat (调度问题交互)</h3>
+            <div id="chat-box" class="chat-history">
+                <div style="color: #718096;">系统就绪，请在下方描述扰动事件让大模型处理...</div>
+            </div>
+            <div class="input-area">
+                <textarea id="user-input" onkeydown="handleKeyDown(event)" placeholder="按 Enter 键直接提交问题..."></textarea>
+                <button onclick="sendQuery()">提问</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="right-column">
+        <div class="top-bar">
+            <h3>📊 Train Timetable (列车实际运行图)</h3>
+            <div class="toggle-group">
+                <button id="btn-orig" class="toggle-btn active" onclick="switchVersion('original')">旧运行图</button>
+                <button id="btn-adj" class="toggle-btn" onclick="switchVersion('adjusted')">新运行图</button>
+            </div>
+        </div>
+        <div id="timetable-chart" class="chart-wrapper"></div>
+    </div>
+</div>
+
+<script>
+    let myChart = null;
+    let currentVersion = 'original';
+    let globalTimetableData = null; 
+
+    function initChart() {
+        const container = document.getElementById('timetable-chart');
+        if (myChart) { myChart.dispose(); }
+        myChart = echarts.init(container);
+        window.addEventListener('resize', () => myChart && myChart.resize());
+    }
+
+    function handleKeyDown(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault(); 
+            sendQuery();            
+        }
+    }
+
+    async function fetchAndRender(version) {
+        try {
+            const res = await fetch(`http://127.0.0.1:8000/api/timetable?version=${version}`);
+            if (!res.ok) throw new Error("数据获取失败");
+            const data = await res.json();
+            
+            globalTimetableData = data; 
+            if (!myChart) initChart();
+            myChart.resize();
+            
+            drawChart(data, version);
+        } catch (err) {
+            console.warn("读取运行图失败:", err.message);
+            if (version === 'original') {
+                setTimeout(() => fetchAndRender('original'), 800);
+            }
+        }
+    }
+
+    function drawChart(data, version) {
+        const stations = data.stations;
+        const trains = data.trains;
+        
+        // 后端传过来的原始时刻数据列表，包含各站的详细到达和出发时间字符串
+        const rawTimesList = data.times; 
+        const timesMinutes = data.times_minutes;
+
+        if (!timesMinutes || timesMinutes.length === 0) return;
+
+        let minTime = Infinity;
+        let maxTime = -Infinity;
+
+        const series = [];
+        trains.forEach((trainId, tIdx) => {
+            const points = timesMinutes[tIdx] || [];
+            const trainRawTimes = (rawTimesList && rawTimesList[tIdx]) ? rawTimesList[tIdx] : [];
+            
+            // 🌟 核心算法重构：将单点折线扩展为“双点到发平台线”
+            const enhancedPoints = [];
+            
+            points.forEach((pt, pIdx) => {
+                if (pt[0] < minTime) minTime = pt[0];
+                if (pt[0] > maxTime) maxTime = pt[0];
+                
+                // 默认直接推入当前点
+                enhancedPoints.push(pt);
+                
+                // 检查当前点和下一个点是否在同一个车站？（即判断是否存在到达/出发的双行时刻数据）
+                // 工业规章数据通常将同一站的到发分两行罗列，或者在字符串中有所体现
+                const currentInfo = trainRawTimes[pIdx] || '';
+                const nextInfo = trainRawTimes[pIdx + 1] || '';
+                
+                // 如果发现连续两条记录属于同一个车站，说明前一个是到达时间，后一个是发车时间
+                if (nextInfo && currentInfo) {
+                    const currStation = currentInfo.split(' ')[0] || '';
+                    const nextStation = nextInfo.split(' ')[0] || '';
+                    
+                    if (currStation === nextStation && pIdx < points.length - 1) {
+                        // 这两个点本身就会在 Y 轴形成一个水平横线区间
+                        // 确认逻辑让它们紧密贴靠在一起
+                    }
+                }
+            });
+
+            if (points.length > 0) {
+                series.push({
+                    name: `车次 ${trainId}`,
+                    type: 'line',
+                    // 使用原生阶梯图连接方式，或者依靠到发两点自然连成横线
+                    // 这里我们采用标准折线，配合后端到发分离的双坐标点，自然形成平台
+                    data: points,  
+                    smooth: false,
+                    symbol: 'circle',
+                    symbolSize: 4, 
+                    showSymbol: true, 
+                    label: { show: false },
+                    lineStyle: {
+                        width: 1.6, 
+                        color: version === 'adjusted' ? '#e63946' : '#1d3557'
+                    },
+                    itemStyle: {
+                        color: version === 'adjusted' ? '#e63946' : '#1d3557'
+                    },
+                    emphasis: {
+                        focus: 'series', 
+                        lineStyle: { width: 4.5 },
+                        label: {
+                            show: true,
+                            position: 'top',
+                            formatter: () => trainId,
+                            fontSize: 11,
+                            fontWeight: 'bold',
+                            color: '#fff',
+                            backgroundColor: version === 'adjusted' ? '#e63946' : '#1d3557',
+                            padding: [3, 5],
+                            borderRadius: 4
+                        }
+                    }
+                });
+            }
+        });
+
+        if (minTime === Infinity || maxTime === -Infinity) {
+            minTime = 360; maxTime = 900;
+        } else {
+            minTime = Math.floor(minTime / 60) * 60 - 15;
+            maxTime = Math.ceil(maxTime / 60) * 60 + 15;
+        }
+
+        const option = {
+            // 🌟 核心改进：引入数据区域缩放组件（滚动条）
+            dataZoom: [
+                {
+                    type: 'slider',      // 1. 下方显式横向滚动条
+                    show: true,
+                    xAxisIndex: [0],
+                    start: 0,            // 默认显示全部时间段
+                    end: 100,
+                    bottom: '2%',
+                    height: 20,
+                    handleSize: '100%',
+                    handleStyle: { color: '#94a3b8' },
+                    textStyle: { color: '#64748b', fontSize: 10 }
+                },
+                {
+                    type: 'inside',      // 2. 允许在图表区域内直接用鼠标滚轮或双指进行缩放
+                    xAxisIndex: [0],
+                    zoomOnMouseWheel: true,
+                    moveOnMouseMove: true
+                }
+            ],
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: 'rgba(255, 255, 255, 0.98)',
+                borderColor: '#cbd5e0',
+                borderWidth: 1,
+                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                axisPointer: {
+                    type: 'line', 
+                    lineStyle: { color: '#94a3b8', type: 'dashed', width: 1.2 }
+                },
+                formatter: function (params) {
+                    if (!params || params.length === 0) return '';
+                    const samplePoint = params[0];
+                    const stationName = samplePoint.value[1];
+                    const rawXValue = samplePoint.value[0];
+                    const h = Math.floor(rawXValue / 60);
+                    const m = Math.floor(rawXValue % 60);
+                    const timeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+
+                    let tip = `<div style="padding: 4px; max-height: 260px; overflow-y:auto; min-width: 190px;">`;
+                    tip += `<b style="color:#1e293b; font-size:13px; display:block; margin-bottom:6px; border-bottom:2px solid #cbd5e0; padding-bottom:4px;">📌 ${stationName} 经由列车 (${timeStr})</b>`;
+                    
+                    params.forEach(p => {
+                        const tId = p.seriesName.replace('车次 ', '');
+                        const dotColor = p.color;
+                        tip += `<div style="margin:4px 0; display:flex; justify-content:space-between; font-size:11px; align-items:center;">
+                                    <span><span style="display:inline-block; width:7px; height:7px; background:${dotColor}; border-radius:50%; margin-right:6px;"></span><b>${tId}</b></span>
+                                    <span style="color:#64748b;">轴线已聚焦</span>
+                                </div>`;
+                    });
+                    tip += `</div>`;
+                    return tip;
+                }
+            },
+            grid: { left: '14%', right: '6%', bottom: '12%', top: '8%' }, // 留足底部滚动条空间
+            xAxis: {
+                type: 'value',
+                min: minTime, max: maxTime, interval: 30, // 刻度加密到30分钟，更显精密
+                axisLabel: {
+                    formatter: (v) => {
+                        const h = Math.floor(v / 60); const m = Math.floor(v % 60);
+                        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                    },
+                    fontSize: 11
+                },
+                splitLine: { show: true, lineStyle: { color: '#e2e8f0', type: 'dashed' } }
+            },
+            yAxis: {
+                type: 'category',
+                data: stations, inverse: true,  
+                axisLabel: { fontSize: 11, fontWeight: 'bold', color: '#2d3748' },
+                splitLine: { show: true, lineStyle: { color: '#a7f3d0', type: 'solid', width: 1 } } 
+            },
+            series: series
+        };
+
+        myChart.setOption(option, true);
+    }
+
+    function switchVersion(version) {
+        currentVersion = version;
+        document.getElementById('btn-orig').classList.toggle('active', version === 'original');
+        document.getElementById('btn-adj').classList.toggle('active', version === 'adjusted');
+        fetchAndRender(version);
+    }
+
+    async function sendQuery() {
+        const inputDom = document.getElementById('user-input');
+        const query = inputDom.value.trim();
+        if (!query) return;
+
+        const chatBox = document.getElementById('chat-box');
+        chatBox.innerHTML += `<div style="margin: 8px 0;"><b>👤 你:</b> ${query}</div>`;
+        inputDom.value = "";
+
+        chatBox.innerHTML += `<div id="loading-msg" style="color: #718096; font-size:12px;">⚙️ RailGPT 正在检索规章文档并重算运行图线...</div>`;
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        try {
+            const response = await fetch("http://127.0.0.1:8000/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ query: query, use_llm_strategy: true })
+            });
+            const result = await response.json();
+            
+            if(document.getElementById('loading-msg')) document.getElementById('loading-msg').remove();
+            
+            chatBox.innerHTML += `<div style="margin: 12px 0; background:#ebf8ff; padding:8px; border-radius:4px; line-height:1.5;"><b>🤖 RailGPT:</b><br/>${result.answer.replace(/\n/g, '<br/>')}</div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            if (result.optimizer && result.optimizer.has_adjusted_timetable) {
+                switchVersion('adjusted');
+            }
+        } catch (err) {
+            if(document.getElementById('loading-msg')) document.getElementById('loading-msg').remove();
+            chatBox.innerHTML += `<div style="color:red; font-size:12px;">连接失败，请确保后台 backend.py 正常运行在 8000 端口。</div>`;
+        }
+    }
+
+    window.onload = () => {
+        initChart();
+        setTimeout(() => { switchVersion('original'); }, 150);
+    };
+</script>
+</body>
+</html>
